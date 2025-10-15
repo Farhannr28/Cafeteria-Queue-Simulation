@@ -1,0 +1,14 @@
+  4         3        30      90.0   # num station, num job type, mean_interarrival (seconds), length of simulation (minutes)
+  1         1        -1         2   # num of machines for num station (-1 = infinite)
+  3         3         2             # num of tasks for num job type
+  1         3         4             # order of tasks for job type 1 
+  2         3         4             # order of tasks for job type 2
+  2         4                       # order of tasks for job type 3
+ 50       120                       # range of service time for station 1
+ 20        40                       # range of accumulated cashier time for station 1
+ 60       180                       # range of service time for station 2
+  5        15                       # range of accumulated cashier time for station 2
+  5        20                       # range of service time for station 3
+  5        10                       # range of accumulated cashier time for station 3
+0.8      0.95       1.0             # cumulative probability for each route
+
