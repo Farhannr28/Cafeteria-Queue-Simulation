@@ -354,14 +354,13 @@ void report(void) /* Report generator function. */
         double avg_delay = transfer[1];
         double max_delay = transfer[3];
 
-        filest(-j);
-        double avg_queue = transfer[1];
-        double max_queue = transfer[2];
-
         fprintf(outfile, "\n\n%4d%17.3f%17.3f", j, avg_delay, max_delay);
 
         if (j != 4)
         {
+            filest(j);
+            double avg_queue = transfer[1];
+            double max_queue = transfer[2];
             fprintf(outfile, "%17.3f%17.3f", avg_queue, max_queue);
         }
         else // if cashier
@@ -371,7 +370,7 @@ void report(void) /* Report generator function. */
             // Print all average queues
             for (int k = 1; k <= num_machines[4]; k++)
             {
-                filest(-(4 + k));
+                filest((4 + k));
                 double avg_queue_k = transfer[1];
                 fprintf(outfile, "%6.3f", avg_queue_k);
                 if (k < num_machines[4])
@@ -383,7 +382,7 @@ void report(void) /* Report generator function. */
             // Print all max queues
             for (int k = 1; k <= num_machines[4]; k++)
             {
-                filest(-(4 + k));
+                filest((4 + k));
                 double max_queue_k = transfer[2];
                 fprintf(outfile, "%6.3f", max_queue_k);
                 if (k < num_machines[4])
@@ -397,7 +396,7 @@ int main() /* Main function. */
 {
     /* Open input and output files. */
 
-    infile = fopen("config1.in", "r"); // Ubah config sesuai keperluan
+    infile = fopen("base_config.in", "r"); // Ubah config sesuai keperluan
     outfile = fopen("main.out", "w");
     if (infile == NULL || outfile == NULL)
     {
