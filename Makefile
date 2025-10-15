@@ -1,15 +1,12 @@
 CC = gcc
 CFLAGS = -I./src/SIMLIB
-SRC = src/main.c src/SIMLIB/simlib.c
+SRC = src/main-bacin.c src/SIMLIB/simlib.c
 OUT = main.out
 
-all: run
+all: build
 
 build: $(SRC)
 	$(CC) $(CFLAGS) -o $(OUT) $(SRC) -lm
-
-run: build
-	./$(OUT)
 
 clean:
 	rm -f $(OUT)
