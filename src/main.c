@@ -119,7 +119,24 @@ void arrive(int new_job) /* Function to serve as both an arrival event of a job
                 }
             }
 
-            // TODO target_cashier shouldnt be -1
+            /* shouldn't happen but handle anyway */
+            if (target_cashier == -1) {
+                target_cashier = 1;
+                for (int i = 2; i <= num_machines[4]; i++) {
+                    if (list_size[4 + i] < list_size[4 + target_cashier])
+                        target_cashier = i;
+                }
+
+                transfer[1] = sim_time;
+                transfer[2] = job_type;
+                transfer[3] = task;
+                transfer[5] = accumulated_time;
+                transfer[6] = target_cashier;
+                list_file(LAST, station + target_cashier);
+
+                return;
+            }
+
             sampst(0.0, station + target_cashier); /* For cashier. */
         }
 
@@ -133,7 +150,8 @@ void arrive(int new_job) /* Function to serve as both an arrival event of a job
 
             if (station == 4)
             {
-                // TODO assert target_cashier != -1
+                assert(target_cashier != -1);
+
                 ++num_cashier_busy[target_cashier];
                 timest((double)num_cashier_busy[target_cashier], station + target_cashier);
             }
@@ -185,7 +203,7 @@ void depart(void) /* Event function for departure of a job from a particular
         {
             assert(target_cashier != -1);
 
-            if (list_size[target_cashier] == 0)
+            if (list_size[station + target_cashier] == 0)
             {
                 /* The queue for this cashier is empty, so make this cashier idle */
 
@@ -326,7 +344,7 @@ void report(void) /* Report generator function. */
        average delay in queue for each station. */
 
     fprintf(outfile, "\n\n\n Work      Average delay       Maximum delay         Average number         Maximum Number");
-    fprintf(outfile, "\nstation       in queue       in queue         in queue         in queue");
+    fprintf(outfile, "\nstation      in queue            in queue               in queue               in queue");
     for (j = 1; j <= num_stations; ++j)
     {
         if (num_machines[j] == -1)
@@ -334,7 +352,7 @@ void report(void) /* Report generator function. */
 
         sampst(0.0, -j);
         double avg_delay = transfer[1];
-        double max_delay = transfer[2];
+        double max_delay = transfer[3];
 
         filest(-j);
         double avg_queue = transfer[1];
@@ -348,24 +366,24 @@ void report(void) /* Report generator function. */
         }
         else // if cashier
         {
-            fprintf(outfile, "%12s", ""); // small gap before each cashier
+            fprintf(outfile, "%5s", ""); // small gap before each cashier
 
-            // Print all average queues 
+            // Print all average queues
             for (int k = 1; k <= num_machines[4]; k++)
             {
-                filest(-(j + k));
+                filest(-(4 + k));
                 double avg_queue_k = transfer[1];
                 fprintf(outfile, "%6.3f", avg_queue_k);
                 if (k < num_machines[4])
                     fprintf(outfile, " | ");
             }
 
-            fprintf(outfile, "%15s", ""); // spacing between avg and max
+            fprintf(outfile, "%5s", ""); // spacing between avg and max
 
-            // Print all max queues 
+            // Print all max queues
             for (int k = 1; k <= num_machines[4]; k++)
             {
-                filest(-(j + k));
+                filest(-(4 + k));
                 double max_queue_k = transfer[2];
                 fprintf(outfile, "%6.3f", max_queue_k);
                 if (k < num_machines[4])
@@ -443,13 +461,16 @@ int main() /* Main function. */
     for (j = 1; j <= num_stations; ++j)
         num_machines_busy[j] = 0;
 
+    for (j = 1; j <= MAX_NUM_CASHIERS; ++j) 
+        num_cashier_busy[j] = 0;
+
     /* Initialize simlib */
 
     init_simlib();
 
     /* Set maxatr = max(maximum number of attributes per record, 4) */
 
-    maxatr = 5; /* NEVER SET maxatr TO BE SMALLER THAN 4. */
+    maxatr = 8; /* NEVER SET maxatr TO BE SMALLER THAN 4. */
 
     /* Schedule the arrival of the first job. */
 
@@ -465,7 +486,6 @@ int main() /* Main function. */
 
     do
     {
-
         /* Determine the next event. */
 
         timing();
