@@ -8,20 +8,28 @@
 #define EVENT_DEPARTURE 2      /* Event type for departure of a job from a \
                   particular station. */
 #define EVENT_END_SIMULATION 3 /* Event type for end of the simulation. */
-#define STREAM_INTERARRIVAL 1  /* Random-number stream for interarrivals. */
-#define STREAM_JOB_TYPE 2      /* Random-number stream for job types. */
-#define STREAM_SERVICE 3       /* Random-number stream for service times. */
+
+#define STREAM_INTERARRIVAL 1
+#define STREAM_GROUP_SIZE 2
+#define STREAM_ROUTE 3
+#define STREAM_ST_HOT_FOOD 4
+#define STREAM_ST_SANDWICH 5
+#define STREAM_ST_DRINKS 6
+#define STREAM_ACT_HOT_FOOD 7
+#define STREAM_ACT_SANDWICH 8
+#define STREAM_ACT_DRINKS 9
+
 #define MAX_NUM_STATIONS 4     /* Maximum number of stations. */
 #define MAX_NUM_JOB_TYPES 3    /* Maximum number of job types. */
 #define MAX_NUM_CASHIERS 3     /* Maximum number of cashiers */
 
 /* Declare non-simlib global variables. */
 
-int num_stations, num_job_types, i, j, num_machines[MAX_NUM_STATIONS + 1],
+int num_stations, num_group_sizes, num_job_types, i, j, num_machines[MAX_NUM_STATIONS + 1],
     num_tasks[MAX_NUM_JOB_TYPES + 1],
     route[MAX_NUM_JOB_TYPES + 1][MAX_NUM_STATIONS + 1], num_machines_busy[MAX_NUM_STATIONS + 1],
     job_type, task, num_cashier_busy[MAX_NUM_CASHIERS + 1];
-double mean_interarrival, length_simulation, prob_distrib_job_type[26],
+double mean_interarrival, length_simulation, prob_distrib_group_size[26], prob_distrib_job_type[26],
     range_service[MAX_NUM_STATIONS + 1][2 + 1], range_accumulated_time[MAX_NUM_STATIONS + 1][2 + 1],
     accumulated_time;
 FILE *infile, *outfile;
@@ -41,7 +49,7 @@ void arrive(int new_job) /* Function to serve as both an arrival event of a job
     {
 
         event_schedule(sim_time + expon(mean_interarrival, STREAM_INTERARRIVAL), EVENT_ARRIVAL);
-        job_type = random_integer(prob_distrib_job_type, STREAM_JOB_TYPE);
+        job_type = random_integer(prob_distrib_job_type, STREAM_ROUTE);
         task = 1;
         accumulated_time = 0;
     }
@@ -165,8 +173,8 @@ void arrive(int new_job) /* Function to serve as both an arrival event of a job
         }
         else
         {
-            service_duration = uniform(range_service[station][1], range_service[station][2], STREAM_SERVICE);
-            accumulated_duration = uniform(range_accumulated_time[station][1], range_accumulated_time[station][2], STREAM_SERVICE);
+            service_duration = uniform(range_service[station][1], range_service[station][2], STREAM_ACT_HOT_FOOD);
+            accumulated_duration = uniform(range_accumulated_time[station][1], range_accumulated_time[station][2], STREAM_ACT_HOT_FOOD);
             accumulated_time += accumulated_duration;
         }
 
@@ -238,8 +246,8 @@ void depart(void) /* Event function for departure of a job from a particular
                 }
                 else
                 {
-                    service_duration = uniform(range_service[station][1], range_service[station][2], STREAM_SERVICE);
-                    accumulated_duration = uniform(range_accumulated_time[station][1], range_accumulated_time[station][2], STREAM_SERVICE);
+                    service_duration = uniform(range_service[station][1], range_service[station][2], STREAM_ACT_HOT_FOOD);
+                    accumulated_duration = uniform(range_accumulated_time[station][1], range_accumulated_time[station][2], STREAM_ACT_HOT_FOOD);
                     accumulated_time_queue += accumulated_duration;
                 }
 
@@ -288,8 +296,8 @@ void depart(void) /* Event function for departure of a job from a particular
             }
             else
             {
-                service_duration = uniform(range_service[station][1], range_service[station][2], STREAM_SERVICE);
-                accumulated_duration = uniform(range_accumulated_time[station][1], range_accumulated_time[station][2], STREAM_SERVICE);
+                service_duration = uniform(range_service[station][1], range_service[station][2], STREAM_ACT_HOT_FOOD);
+                accumulated_duration = uniform(range_accumulated_time[station][1], range_accumulated_time[station][2], STREAM_ACT_HOT_FOOD);
                 accumulated_time_queue += accumulated_duration;
             }
 
@@ -343,8 +351,8 @@ void report(void) /* Report generator function. */
     /* Compute the average number in queue, the average utilization, and the
        average delay in queue for each station. */
 
-    fprintf(outfile, "\n\n\n Work      Average delay       Maximum delay         Average number         Maximum Number");
-    fprintf(outfile, "\nstation      in queue            in queue               in queue               in queue");
+    fprintf(outfile, "\n\n\n Work         Average delay       Maximum delay      Average number      Maximum Number");
+    fprintf(outfile, "\nstation         in queue            in queue            in queue            in queue");
     for (j = 1; j <= num_stations; ++j)
     {
         if (num_machines[j] == -1)
@@ -354,18 +362,18 @@ void report(void) /* Report generator function. */
         double avg_delay = transfer[1];
         double max_delay = transfer[3];
 
-        fprintf(outfile, "\n\n%4d%17.3f%17.3f", j, avg_delay, max_delay);
+        fprintf(outfile, "\n\n%4d%20.3f%20.3f", j, avg_delay, max_delay);
 
         if (j != 4)
         {
             filest(j);
             double avg_queue = transfer[1];
             double max_queue = transfer[2];
-            fprintf(outfile, "%17.3f%17.3f", avg_queue, max_queue);
+            fprintf(outfile, "%20.3f%20.3f", avg_queue, max_queue);
         }
         else // if cashier
         {
-            fprintf(outfile, "%5s", ""); // small gap before each cashier
+            fprintf(outfile, "%10s", ""); // small gap before each cashier
 
             // Print all average queues
             for (int k = 1; k <= num_machines[4]; k++)
@@ -406,7 +414,7 @@ int main() /* Main function. */
 
     /* Read input parameters. */
 
-    fscanf(infile, "%d %d %lg %lg", &num_stations, &num_job_types, &mean_interarrival, &length_simulation);
+    fscanf(infile, "%d %d %d %lg %lg", &num_stations, &num_group_sizes, &num_job_types, &mean_interarrival, &length_simulation);
     for (j = 1; j <= num_stations; ++j)
         fscanf(infile, "%d", &num_machines[j]);
     for (i = 1; i <= num_job_types; ++i)
@@ -414,12 +422,14 @@ int main() /* Main function. */
     for (i = 1; i <= num_job_types; ++i)
         for (j = 1; j <= num_tasks[i]; ++j)
             fscanf(infile, "%d", &route[i][j]);
-    for (i = 1; i <= num_stations - 1; ++i) // ! Exclude Cashier (Station 4)
-        for (j = 1; j <= 2; ++j)
+    for (i = 1; i <= num_stations - 1; ++i) {// ! Exclude Cashier (Station 4)
+        for (j = 1; j <= 2; ++j) {
             fscanf(infile, "%lg", &range_service[i][j]);
-    for (i = 1; i <= num_stations - 1; ++i) // ! Exclude Cashier (Station 4)
-        for (j = 1; j <= 2; ++j)
             fscanf(infile, "%lg", &range_accumulated_time[i][j]);
+        }
+    }
+    for (i = 1; i <= num_group_sizes; ++i)
+        fscanf(infile, "%lg", &prob_distrib_group_size[i]);
     for (i = 1; i <= num_job_types; ++i)
         fscanf(infile, "%lg", &prob_distrib_job_type[i]);
 
@@ -434,6 +444,9 @@ int main() /* Main function. */
     fprintf(outfile, "Number of tasks for each job type      ");
     for (i = 1; i <= num_job_types; ++i)
         fprintf(outfile, "%5d", num_tasks[i]);
+    fprintf(outfile, "\n\nDistribution function of group sizes  ");
+    for (i = 1; i <= num_group_sizes; ++i)
+        fprintf(outfile, "%8.3f", prob_distrib_group_size[i]);
     fprintf(outfile, "\n\nDistribution function of job types  ");
     for (i = 1; i <= num_job_types; ++i)
         fprintf(outfile, "%8.3f", prob_distrib_job_type[i]);
