@@ -1,5 +1,7 @@
 #include "SIMLIB/simlib.h"
 
+#define SEC_TO_MIN(x) ((x) / 60.0)
+
 #define GROUP_ARRIVAL 1
 #define HOT_FOOD_DEPARTURE 2
 #define SANDWICH_DEPARTURE 3
@@ -26,7 +28,7 @@ int num_stations, num_group_sizes, num_job_types, i, j,
     num_machines[MAX_NUM_STATIONS + 1], num_tasks[MAX_NUM_JOB_TYPES + 1],
     route[MAX_NUM_JOB_TYPES + 1][MAX_NUM_STATIONS + 1],
     num_machines_busy[MAX_NUM_STATIONS + 1], job_type, task,
-    num_cashier_busy[MAX_NUM_CASHIERS + 1];
+    num_cashier_busy[MAX_NUM_CASHIERS + 1], num_customers_in_system;
 double mean_interarrival, length_simulation,
     prob_distrib_group_size[MAX_NUM_GROUP_SIZES + 1],
     prob_distrib_job_type[MAX_NUM_JOB_TYPES + 1],
@@ -43,7 +45,6 @@ void report(void);
 
 int main(int argc, char *argv[]) {
   /* Check command-line arguments. */
-
   if (argc < 3) {
     printf("Usage: %s <input_file> <output_file>\n", argv[0]);
     printf("Example: %s config/1-base.in main.out\n", argv[0]);
@@ -51,7 +52,6 @@ int main(int argc, char *argv[]) {
   }
 
   /* Open input and output files. */
-
   infile = fopen(argv[1], "r");
   outfile = fopen(argv[2], "w");
   if (infile == NULL || outfile == NULL) {
@@ -60,7 +60,6 @@ int main(int argc, char *argv[]) {
   }
 
   /* Read input parameters. */
-
   fscanf(infile, "%d %d %d %lg %lg", &num_stations, &num_group_sizes,
          &num_job_types, &mean_interarrival, &length_simulation);
   for (j = 1; j <= num_stations; ++j)
@@ -70,88 +69,98 @@ int main(int argc, char *argv[]) {
   for (i = 1; i <= num_job_types; ++i)
     for (j = 1; j <= num_tasks[i]; ++j)
       fscanf(infile, "%d", &route[i][j]);
-  for (i = 1; i <= num_stations - 1; ++i) // ! Exclude Cashier (Station 4)
+
+  /* Service ranges read only for stations 1..num_stations-1 (cashier excluded).
+   */
+  for (i = 1; i <= num_stations - 1; ++i)
     for (j = 1; j <= 2; ++j)
       fscanf(infile, "%lg", &range_service[i][j]);
-  for (i = 1; i <= num_stations - 1; ++i) // ! Exclude Cashier (Station 4)
+
+  /* Accumulated-time ranges read only for stations 1..num_stations-1. */
+  for (i = 1; i <= num_stations - 1; ++i)
     for (j = 1; j <= 2; ++j)
       fscanf(infile, "%lg", &range_accumulated_time[i][j]);
+
   for (i = 1; i <= num_group_sizes; ++i)
     fscanf(infile, "%lg", &prob_distrib_group_size[i]);
   for (i = 1; i <= num_job_types; ++i)
     fscanf(infile, "%lg", &prob_distrib_job_type[i]);
 
   /* Write report heading and input parameters. */
-
   fprintf(outfile, "Cafeteria Job-Shop model\n\n");
   fprintf(outfile, "Number of work stations%21d\n\n", num_stations);
+
   fprintf(outfile, "Number of machines (workers) in each station     ");
-  for (j = 1; j <= num_stations; ++j)
-    fprintf(outfile, "%5d", num_machines[j]);
+  for (j = 1; j <= num_stations; ++j) {
+    if (num_machines[j] < 0) {
+      /* Show infinity/self-service explicitly (e.g., Drinks). */
+      fprintf(outfile, "  inf");
+    } else {
+      fprintf(outfile, "%5d", num_machines[j]);
+    }
+  }
+
   fprintf(outfile, "\n\nNumber of group sizes%25d\n\n", num_group_sizes);
   fprintf(outfile, "Distribution function of group sizes  ");
   for (i = 1; i <= num_group_sizes; ++i)
     fprintf(outfile, "%8.3f", prob_distrib_group_size[i]);
+
   fprintf(outfile, "\n\nNumber of job types%25d\n\n", num_job_types);
   fprintf(outfile, "Number of tasks for each job type      ");
   for (i = 1; i <= num_job_types; ++i)
     fprintf(outfile, "%5d", num_tasks[i]);
+
   fprintf(outfile, "\n\nDistribution function of job types  ");
   for (i = 1; i <= num_job_types; ++i)
     fprintf(outfile, "%8.3f", prob_distrib_job_type[i]);
+
+  /* IMPORTANT: interarrival is in seconds; length_simulation is already in
+   * minutes. */
   fprintf(outfile, "\n\nMean interarrival time of jobs%14.2f seconds\n\n",
           mean_interarrival);
   fprintf(outfile, "Length of the simulation%20.1f minutes\n\n\n",
           length_simulation);
+
   fprintf(outfile, "Job type      Work stations on route");
   for (i = 1; i <= num_job_types; ++i) {
     fprintf(outfile, "\n\n%4d        ", i);
     for (j = 1; j <= num_tasks[i]; ++j)
       fprintf(outfile, "%5d", route[i][j]);
   }
-  fprintf(outfile, "\n\n\nJob type     ");
+
+  fprintf(outfile, "\n\n\nStation     ");
   fprintf(outfile, "Range service time for stations");
-  for (i = 1; i <= num_stations; ++i) {
+  /* Print only for stations with actual service-time ranges
+   * (1..num_stations-1). */
+  for (i = 1; i <= num_stations - 1; ++i) {
     fprintf(outfile, "\n\n%4d    ", i);
     for (j = 1; j <= 2; ++j)
       fprintf(outfile, "%9.2f", range_service[i][j]);
   }
+  /* For the cashier station, show N/A (service is ACT, not a station service
+   * range). */
+  fprintf(outfile, "\n\n%4d    %9s%9s", num_stations, "N/A", "N/A");
 
-  /* Initialize all machines in all stations to the idle state. */
-
+  /* Initialize machines/cashiers to idle and counters. */
   for (j = 1; j <= num_stations; ++j)
     num_machines_busy[j] = 0;
-
   for (j = 1; j <= num_machines[num_stations]; ++j)
     num_cashier_busy[j] = 0;
+  num_customers_in_system = 0;
 
   /* Initialize simlib */
-
   init_simlib();
 
-  /* Set maxatr = max(maximum number of attributes per record, 4) */
+  /* transfer[1..6] used (extra for cashier id + cumulative queue delay). */
+  maxatr = 6; /* NEVER SET maxatr TO BE SMALLER THAN 4. */
 
-  maxatr = 5; /* NEVER SET maxatr TO BE SMALLER THAN 4. */
-
-  /* Schedule the arrival of the first group. */
-
+  /* Schedule the first arrival and the end of simulation. */
   event_schedule(expon(mean_interarrival, STREAM_INTERARRIVAL), GROUP_ARRIVAL);
-
-  /* Schedule the end of the simulation.  (This is needed for consistency of
-     units.) */
-
   event_schedule(60 * length_simulation, END_SIMULATION);
 
-  /* Run the simulation until it terminates after an end-simulation event
-     (type END_SIMULATION) occurs. */
-
+  /* Main event loop */
   do {
-    /* Determine the next event. */
-
     timing();
-
-    /* Invoke the appropriate event function. */
-
     switch (next_event_type) {
     case GROUP_ARRIVAL:
       group_arrival();
@@ -173,16 +182,10 @@ int main(int argc, char *argv[]) {
       fflush(outfile);
       break;
     }
-
-    /* If the event just executed was not the end-simulation event (type
-       END_SIMULATION), continue simulating.  Otherwise, end the
-       simulation. */
-
   } while (next_event_type != END_SIMULATION);
 
   fclose(infile);
   fclose(outfile);
-
   return 0;
 }
 
@@ -192,77 +195,74 @@ void group_arrival(void) {
 
   int group_size = random_integer(prob_distrib_group_size, STREAM_GROUP_SIZE);
   for (int i = 0; i < group_size; i++) {
+    /* Track customer entering the system */
+    ++num_customers_in_system;
+    timest((double)num_customers_in_system, num_stations + num_job_types + 2);
+
     int random_route = random_integer(prob_distrib_job_type, STREAM_ROUTE);
 
-    // Hot food route (1): 1 -> 3 -> 4
-    // Sandwich route (2): 2 -> 3 -> 4
-    // Drinks route (3): 3 -> 4
     if (random_route == 1) {
+      /* Hot food route: 1 -> 3 -> 4 */
       if (num_machines_busy[1] == num_machines[1]) {
-        // 1. Time of arrival to this station.
-        // 2. Job type.
-        // 3. Current task number.
-        // 4. Accumulated time (ACT) for this customer
-        transfer[1] = sim_time;
-        transfer[2] = 1;
-        transfer[3] = 1;
-        transfer[4] = 0.0; // Initialize ACT = 0
+        /* Queue at station 1 */
+        transfer[1] = sim_time; /* arrival to station */
+        transfer[2] = 1;        /* job type */
+        transfer[3] = 1;        /* current task (unused beyond route id) */
+        transfer[4] = 0.0;      /* ACT so far */
+        transfer[5] = 0.0;      /* cumulative queue delay so far */
         list_file(LAST, 1);
       } else {
-        sampst(0.0, 1);                // Record 0 delay for station
-        sampst(0.0, num_stations + 1); // Record 0 delay for job type 1
+        /* Start service immediately */
+        sampst(0.0, 1); /* 0 delay for station 1 */
         ++num_machines_busy[1];
         timest((double)num_machines_busy[1], 1);
 
-        // Store customer info in transfer for departure event
-        transfer[3] = 1;   // job type
-        transfer[4] = 0.0; // Initialize ACT = 0
+        /* For departure event */
+        transfer[3] = 1;   /* job type */
+        transfer[4] = 0.0; /* ACT so far */
+        transfer[5] = 0.0; /* cumulative queue delay so far */
 
-        // Schedule departure with U(50,120) using stream 4
         event_schedule(sim_time + uniform(range_service[1][1],
                                           range_service[1][2],
                                           STREAM_ST_HOT_FOOD),
                        HOT_FOOD_DEPARTURE);
       }
     } else if (random_route == 2) {
+      /* Sandwich route: 2 -> 3 -> 4 */
       if (num_machines_busy[2] == num_machines[2]) {
-        // 1. Time of arrival to this station.
-        // 2. Job type.
-        // 3. Current task number.
-        // 4. Accumulated time (ACT) for this customer
-        transfer[1] = sim_time;
-        transfer[2] = 2;
-        transfer[3] = 2;
-        transfer[4] = 0.0; // Initialize ACT = 0
+        /* Queue at station 2 */
+        transfer[1] = sim_time; /* arrival to station */
+        transfer[2] = 2;        /* job type */
+        transfer[3] = 2;        /* current task (unused beyond route id) */
+        transfer[4] = 0.0;      /* ACT so far */
+        transfer[5] = 0.0;      /* cumulative queue delay so far */
         list_file(LAST, 2);
       } else {
-        sampst(0.0, 2);                // Record 0 delay for station
-        sampst(0.0, num_stations + 2); // Record 0 delay for job type 2
+        /* Start service immediately */
+        sampst(0.0, 2); /* 0 delay for station 2 */
         ++num_machines_busy[2];
         timest((double)num_machines_busy[2], 2);
 
-        // Store customer info in transfer for departure event
-        transfer[3] = 2;   // job type
-        transfer[4] = 0.0; // Initialize ACT = 0
+        /* For departure event */
+        transfer[3] = 2;   /* job type */
+        transfer[4] = 0.0; /* ACT so far */
+        transfer[5] = 0.0; /* cumulative queue delay so far */
 
-        // Schedule departure with U(60, 180) using stream 5
         event_schedule(sim_time + uniform(range_service[2][1],
                                           range_service[2][2],
                                           STREAM_ST_SANDWICH),
                        SANDWICH_DEPARTURE);
       }
     } else {
-      // Drinks-only route (route 3)
-      // Initialize ACT = U(5,10) using stream 9
+      /* Drinks-only route: 3 -> 4 */
       double customer_act =
           uniform(range_accumulated_time[3][1], range_accumulated_time[3][2],
                   STREAM_ACT_DRINKS);
 
-      // Store customer's route and ACT in transfer for drinks_departure
-      transfer[3] = 3; // Route 3 (drinks-only)
-      transfer[4] = customer_act;
+      transfer[3] = 3;            /* job type */
+      transfer[4] = customer_act; /* ACT so far */
+      transfer[5] = 0.0;          /* cumulative queue delay so far */
 
-      // Schedule DRINKS_DEPARTURE at now + U(5,20) using stream 6
       event_schedule(sim_time + uniform(range_service[3][1],
                                         range_service[3][2], STREAM_ST_DRINKS),
                      DRINKS_DEPARTURE);
@@ -271,192 +271,209 @@ void group_arrival(void) {
 }
 
 void hot_food_departure(void) {
-  // Get customer info from event transfer
-  int job_type = transfer[3]; // Route 1
+  int job_type = transfer[3]; /* Route 1 */
   double customer_act = transfer[4];
 
-  // Add accumulated time U(20,40) using stream 7
+  /* Add accumulated time for hot food step */
   customer_act += uniform(range_accumulated_time[1][1],
                           range_accumulated_time[1][2], STREAM_ACT_HOT_FOOD);
 
-  // Store job_type and ACT for drinks_departure
+  /* Store for drinks_departure */
   transfer[3] = job_type;
   transfer[4] = customer_act;
+  /* transfer[5] already holds cumulative queue delay so far */
 
-  // Schedule DRINKS_DEPARTURE at now + U(5,20) using stream 6
+  /* Go to drinks (self-service timing before cashier) */
   event_schedule(sim_time + uniform(range_service[3][1], range_service[3][2],
                                     STREAM_ST_DRINKS),
                  DRINKS_DEPARTURE);
 
-  // Check if hot food queue is nonempty
+  /* Free/advance server at station 1 */
   if (list_size[1] == 0) {
-    // Queue is empty, free the worker
     --num_machines_busy[1];
     timest((double)num_machines_busy[1], 1);
   } else {
-    // Queue is nonempty, start service for next customer
-    list_remove(FIRST, 1); // Pop head from hot food queue
-
-    // Calculate and record delay
+    /* Start service for next customer */
+    list_remove(FIRST, 1);
     double delay = sim_time - transfer[1];
-    sampst(delay, 1); // Record delay for hot food station
+    sampst(delay, 1); /* station 1 queue delay */
 
-    // Get customer info from transfer (after list_remove)
     int next_job_type = transfer[2];
-    int next_task = transfer[3];
-    double next_customer_act = transfer[4]; // Customer's ACT
+    double next_customer_act = transfer[4];
+    double cum_q =
+        transfer[5] + delay; /* accumulate per-customer queue delay */
 
-    // Also record delay for this job type (route)
-    sampst(delay, num_stations + next_job_type);
-
-    // Schedule next HOT_FOOD_DEPARTURE with U(50,120) using stream 4
+    /* Schedule next hot food completion */
     transfer[3] = next_job_type;
-    transfer[4] = next_customer_act; // Pass ACT to departure event
+    transfer[4] = next_customer_act;
+    transfer[5] = cum_q;
     event_schedule(sim_time + uniform(range_service[1][1], range_service[1][2],
                                       STREAM_ST_HOT_FOOD),
                    HOT_FOOD_DEPARTURE);
-    // Worker stays busy
   }
 }
 
 void sandwich_departure(void) {
-  // Get customer info from event transfer
-  int job_type = transfer[3]; // Route 2
+  int job_type = transfer[3]; /* Route 2 */
   double customer_act = transfer[4];
 
-  // Add accumulated time U(5,15) using stream 8
+  /* Add accumulated time for sandwich step */
   customer_act += uniform(range_accumulated_time[2][1],
                           range_accumulated_time[2][2], STREAM_ACT_SANDWICH);
 
-  // Store job_type and ACT for drinks_departure
+  /* Store for drinks_departure */
   transfer[3] = job_type;
   transfer[4] = customer_act;
+  /* transfer[5] already holds cumulative queue delay so far */
 
-  // Schedule DRINKS_DEPARTURE at now + U(5,20) using stream 6
+  /* Go to drinks (self-service timing before cashier) */
   event_schedule(sim_time + uniform(range_service[3][1], range_service[3][2],
                                     STREAM_ST_DRINKS),
                  DRINKS_DEPARTURE);
 
-  // Check if sandwich queue is nonempty
+  /* Free/advance server at station 2 */
   if (list_size[2] == 0) {
-    // Queue is empty, free the worker
     --num_machines_busy[2];
     timest((double)num_machines_busy[2], 2);
   } else {
-    // Queue is nonempty, start service for next customer
-    list_remove(FIRST, 2); // Pop head from sandwich queue
-
-    // Calculate and record delay
+    /* Start service for next customer */
+    list_remove(FIRST, 2);
     double delay = sim_time - transfer[1];
-    sampst(delay, 2); // Record delay for sandwich station
+    sampst(delay, 2); /* station 2 queue delay */
 
-    // Get customer info from transfer (after list_remove)
     int next_job_type = transfer[2];
-    int next_task = transfer[3];
-    double next_customer_act = transfer[4]; // Customer's ACT
+    double next_customer_act = transfer[4];
+    double cum_q =
+        transfer[5] + delay; /* accumulate per-customer queue delay */
 
-    // Also record delay for this job type (route)
-    sampst(delay, num_stations + next_job_type);
-
-    // Schedule next SANDWICH_DEPARTURE with U(60, 180) using stream 5
+    /* Schedule next sandwich completion */
     transfer[3] = next_job_type;
-    transfer[4] = next_customer_act; // Pass ACT to departure event
+    transfer[4] = next_customer_act;
+    transfer[5] = cum_q;
     event_schedule(sim_time + uniform(range_service[2][1], range_service[2][2],
                                       STREAM_ST_SANDWICH),
                    SANDWICH_DEPARTURE);
-    // Worker stays busy
   }
 }
 
 void drinks_departure(void) {
-  // Cashier arrival - choose shortest cashier queue
-  int shortest_queue = 1; // Start with cashier 1
-  int min_queue_size =
-      list_size[4]; // Queue for cashier 1 (list 4 = station 4, cashier 1)
+  /* Determine target cashier: prefer any idle cashier, else shortest queue */
+  int target_cashier = 0;
 
-  // Find the shortest cashier queue
-  for (int i = 2; i <= num_machines[4]; i++) {
-    int queue_list =
-        3 + i; // Cashier queues are on lists 4, 5, 6 for cashiers 1, 2, 3
-    if (list_size[queue_list] < min_queue_size) {
-      min_queue_size = list_size[queue_list];
-      shortest_queue = i;
+  /* 1) Look for idle cashier */
+  for (int c = 1; c <= num_machines[4]; ++c) {
+    if (num_cashier_busy[c] == 0) {
+      target_cashier = c;
+      break;
     }
   }
 
-  int cashier_queue_list =
-      3 + shortest_queue; // List number for this cashier's queue
+  /* 2) If none idle, choose the cashier with shortest queue */
+  if (target_cashier == 0) {
+    int best = 1, best_q = list_size[4]; /* list 4 = cashier 1 queue */
+    for (int c = 2; c <= num_machines[4]; ++c) {
+      int qsz = list_size[3 + c]; /* queues 4,5,6,... */
+      if (qsz < best_q) {
+        best_q = qsz;
+        best = c;
+      }
+    }
+    target_cashier = best;
+  }
 
-  // Get customer's route and ACT from event transfer
+  int cashier_queue_list = 3 + target_cashier;
+
+  /* Get route and ACT; transfer[5] holds cumulative queue delay so far */
   int job_type = transfer[3];
   double customer_act = transfer[4];
+  double cum_q = transfer[5];
 
-  // Check if chosen cashier is idle
-  if (num_cashier_busy[shortest_queue] == 0) {
-    // Cashier is idle, start service immediately
-    num_cashier_busy[shortest_queue] = 1;
+  if (num_cashier_busy[target_cashier] == 0) {
+    /* Cashier idle: start immediately */
+    num_cashier_busy[target_cashier] = 1;
+    sampst(0.0, 4); /* 0 queue delay at cashier */
 
-    // Record 0 delay for station and job type
-    sampst(0.0, 4);                       // Cashier station
-    sampst(0.0, num_stations + job_type); // Job type
-
-    // Schedule CASHIER_DEPARTURE at now + ACT (accumulated time)
-    transfer[3] = job_type;       // Store job type
-    transfer[4] = customer_act;   // Pass ACT to cashier_departure
-    transfer[5] = shortest_queue; // Store which cashier
+    transfer[3] = job_type;       /* keep job type */
+    transfer[4] = customer_act;   /* ACT */
+    transfer[5] = cum_q;          /* cumulative queue delay so far */
+    transfer[6] = target_cashier; /* cashier id */
     event_schedule(sim_time + customer_act, CASHIER_DEPARTURE);
+
+    /* Track total number in all cashier queues */
+    int total_cashier_queue = 0;
+    for (int i = 1; i <= num_machines[4]; i++)
+      total_cashier_queue += list_size[3 + i];
+    timest((double)total_cashier_queue, num_stations + num_job_types + 1);
   } else {
-    // Cashier is busy, enqueue with timestamp
-    transfer[1] = sim_time;       // Timestamp
-    transfer[2] = job_type;       // Job type (route)
-    transfer[3] = customer_act;   // Store ACT for this customer
-    transfer[4] = shortest_queue; // Which cashier queue
+    /* Enqueue */
+    transfer[1] = sim_time;       /* enqueue timestamp */
+    transfer[2] = job_type;       /* job type */
+    transfer[3] = customer_act;   /* ACT */
+    transfer[4] = cum_q;          /* cumulative queue delay so far */
+    transfer[5] = target_cashier; /* which cashier's queue (for clarity) */
     list_file(LAST, cashier_queue_list);
+
+    int total_cashier_queue = 0;
+    for (int i = 1; i <= num_machines[4]; i++)
+      total_cashier_queue += list_size[3 + i];
+    timest((double)total_cashier_queue, num_stations + num_job_types + 1);
   }
 }
 
 void cashier_departure(void) {
-  // Get which cashier this departure is from
-  int cashier_num = transfer[5];
-  int cashier_queue_list =
-      3 + cashier_num; // List 4, 5, or 6 for cashiers 1, 2, 3
+  /* The departing customer's info is in transfer[...] */
+  int cashier_num = transfer[6];
+  int cashier_queue_list = 3 + cashier_num;
 
-  // Customer departs the system (no further processing needed)
+  /* Sample this customer's TOTAL queue delay by job type (once, on departure)
+   */
+  int job_type = transfer[3];
+  double cum_q =
+      transfer[5]; /* cumulative queue delay including hot/sandwich (+ cashier
+                      delay added below for queued ones) */
+  sampst(cum_q, num_stations + job_type);
 
-  // Check if this cashier's queue is nonempty
+  /* Customer leaves the system */
+  --num_customers_in_system;
+  timest((double)num_customers_in_system, num_stations + num_job_types + 2);
+
+  /* Start next, if any */
   if (list_size[cashier_queue_list] == 0) {
-    // Queue is empty, free the cashier
+    /* No one waiting: cashier becomes idle */
     num_cashier_busy[cashier_num] = 0;
+
+    int total_cashier_queue = 0;
+    for (int i = 1; i <= num_machines[4]; i++)
+      total_cashier_queue += list_size[3 + i];
+    timest((double)total_cashier_queue, num_stations + num_job_types + 1);
   } else {
-    // Queue is nonempty, start service for next customer
-    list_remove(FIRST, cashier_queue_list); // Pop head
+    /* Someone is waiting — start their service */
+    list_remove(FIRST, cashier_queue_list);
 
-    // After list_remove, transfer contains the customer's data:
-    // transfer[1] = timestamp when they joined queue
-    // transfer[2] = job type (route)
-    // transfer[3] = ACT for this customer
-    // transfer[4] = cashier number
+    /* Extract waiting customer's info */
+    double enqueue_time = transfer[1];
+    int next_job_type = transfer[2];
+    double next_act = transfer[3];
+    double next_cum_q = transfer[4];  /* cum queue delay so far (pre-cashier) */
+    int queued_cashier = transfer[5]; /* should equal cashier_num */
 
-    // Calculate and record delay
-    double delay = sim_time - transfer[1];
-    sampst(delay, 4); // Record delay for cashier station (station 4)
+    /* Add this customer's cashier queue delay */
+    double delay = sim_time - enqueue_time;
+    sampst(delay, 4);    /* cashier station queue delay */
+    next_cum_q += delay; /* now includes cashier queueing */
 
-    // Get customer info from transfer
-    int job_type = transfer[2];
-    double customer_act = transfer[3];
-    int queued_cashier = transfer[4];
+    /* Schedule their completion at this cashier */
+    transfer[3] = next_job_type;
+    transfer[4] = next_act;
+    transfer[5] = next_cum_q;     /* pass cumulative delay forward */
+    transfer[6] = queued_cashier; /* cashier id */
+    event_schedule(sim_time + next_act, CASHIER_DEPARTURE);
 
-    // Also record delay for this job type
-    sampst(delay, num_stations + job_type);
-
-    // Store info for next departure
-    transfer[3] = job_type;
-    transfer[4] = customer_act;
-    transfer[5] = queued_cashier;
-
-    // Schedule CASHIER_DEPARTURE at now + ACT
-    event_schedule(sim_time + customer_act, CASHIER_DEPARTURE);
-    // Cashier stays busy
+    /* Track total number in all cashier queues */
+    int total_cashier_queue = 0;
+    for (int i = 1; i <= num_machines[4]; i++)
+      total_cashier_queue += list_size[3 + i];
+    timest((double)total_cashier_queue, num_stations + num_job_types + 1);
   }
 }
 
@@ -464,73 +481,114 @@ void report(void) {
   int i;
   double overall_avg_job_tot_delay, avg_job_tot_delay, sum_probs;
 
-  /* Compute the average total delay in queue for each job type and the
-     overall average job total delay. */
+  fprintf(outfile, "\n\n\n========================================\n");
+  fprintf(outfile, "SYSTEM PERFORMANCE MEASURES\n");
+  fprintf(outfile, "========================================\n");
 
-  fprintf(outfile, "\n\n\n\nJob type     Average total delay in queue");
-  overall_avg_job_tot_delay = 0.0;
+  /* 1. Average and maximum delays in queue for each (queueing) station */
+  fprintf(outfile, "\n\n1. DELAYS IN QUEUE BY STATION\n");
+  fprintf(outfile, "---------------------------------------------\n");
+  fprintf(outfile, "Station                    Average    Maximum\n");
+  fprintf(outfile, "                           (minutes)  (minutes)\n");
+  fprintf(outfile, "---------------------------------------------\n");
+
+  /* Hot food (station 1) */
+  sampst(0.0, -1);
+  fprintf(outfile, "Hot Food                   %8.2f   %8.2f\n",
+          SEC_TO_MIN(transfer[1]), SEC_TO_MIN(transfer[3]));
+
+  /* Specialty sandwiches (station 2) */
+  sampst(0.0, -2);
+  fprintf(outfile, "Specialty Sandwiches       %8.2f   %8.2f\n",
+          SEC_TO_MIN(transfer[1]), SEC_TO_MIN(transfer[3]));
+
+  /* Cashiers (station 4) */
+  sampst(0.0, -4);
+  fprintf(outfile, "Cashiers (all)             %8.2f   %8.2f\n",
+          SEC_TO_MIN(transfer[1]), SEC_TO_MIN(transfer[3]));
+
+  /* 2. Time-average and maximum number in queue (exclude Drinks — infinite
+   * server) */
+  fprintf(outfile, "\n\n2. NUMBER IN QUEUE\n");
+  fprintf(outfile, "---------------------------------------------\n");
+  fprintf(outfile, "Station                    Time-Avg   Maximum\n");
+  fprintf(outfile, "---------------------------------------------\n");
+
+  /* Hot food queue */
+  filest(1);
+  fprintf(outfile, "Hot Food                   %8.2f   %8.0f\n", transfer[1],
+          transfer[2]); /* counts, not time */
+
+  /* Specialty sandwiches queue */
+  filest(2);
+  fprintf(outfile, "Specialty Sandwiches       %8.2f   %8.0f\n", transfer[1],
+          transfer[2]); /* counts, not time */
+
+  /* Total cashier queue across all cashiers (tracked via timest) */
+  timest(0.0, -(num_stations + num_job_types + 1));
+  fprintf(outfile, "All Cashiers (total)       %8.2f   %8.0f\n", transfer[1],
+          transfer[2]); /* counts, not time */
+
+  /* Individual cashier queues (optional detail) */
+  fprintf(outfile, "\n   Individual Cashier Queues:\n");
+  for (int k = 1; k <= num_machines[4]; k++) {
+    filest(3 + k);
+    double avg_queue_k = transfer[1];
+    double max_queue_k = transfer[2];
+    if (avg_queue_k < 0)
+      avg_queue_k = 0.0;
+    if (max_queue_k < 0)
+      max_queue_k = 0.0;
+    fprintf(outfile, "   Cashier %d                 %8.2f   %8.0f\n", k,
+            avg_queue_k, max_queue_k); /* counts */
+  }
+
+  /* 3. Average and maximum TOTAL queue delay per customer, by type
+        (sampled exactly once per customer upon leaving cashier) */
+  fprintf(outfile, "\n\n3. TOTAL DELAY BY CUSTOMER TYPE\n");
+  fprintf(outfile, "---------------------------------------------\n");
+  fprintf(outfile, "Customer Type              Average    Maximum\n");
+  fprintf(outfile, "                           (minutes)  (minutes)\n");
+  fprintf(outfile, "---------------------------------------------\n");
+
+  const char *customer_names[] = {"", "Hot Food Route", "Sandwich Route",
+                                  "Drinks-Only Route"};
+
+  for (i = 1; i <= num_job_types; ++i) {
+    sampst(0.0, -(num_stations +
+                  i)); /* read totals per customer type (in seconds) */
+    double avg_sec = transfer[1];
+    double max_sec = transfer[3];
+    fprintf(outfile, "%-26s %8.2f   %8.2f\n", customer_names[i],
+            SEC_TO_MIN(avg_sec), SEC_TO_MIN(max_sec));
+  }
+
+  /* 4. OVERALL average total delay (probabilities are CDF-style) */
+  fprintf(outfile, "\n\n4. OVERALL AVERAGE TOTAL DELAY\n");
+  fprintf(outfile, "---------------------------------------------\n");
+
+  overall_avg_job_tot_delay = 0.0; /* accumulate in seconds */
   sum_probs = 0.0;
   for (i = 1; i <= num_job_types; ++i) {
-    avg_job_tot_delay = sampst(0.0, -(num_stations + i)) * num_tasks[i];
-    fprintf(outfile, "\n\n%4d%27.3f", i, avg_job_tot_delay);
+    sampst(0.0, -(num_stations + i));
+    double avg_sec = transfer[1];
     overall_avg_job_tot_delay +=
-        (prob_distrib_job_type[i] - sum_probs) * avg_job_tot_delay;
+        (prob_distrib_job_type[i] - sum_probs) * avg_sec;
     sum_probs = prob_distrib_job_type[i];
   }
-  fprintf(outfile, "\n\nOverall average job total delay =%10.3f\n",
-          overall_avg_job_tot_delay);
+  fprintf(outfile, "Overall Average Total Delay:  %8.2f minutes\n",
+          SEC_TO_MIN(overall_avg_job_tot_delay));
 
-  /* Compute the average number in queue, the average utilization, and the
-     average delay in queue for each station. */
+  /* 5. Total number of customers in entire system (counts) */
+  fprintf(outfile, "\n\n5. TOTAL CUSTOMERS IN SYSTEM\n");
+  fprintf(outfile, "---------------------------------------------\n");
+  timest(0.0, -(num_stations + num_job_types + 2));
+  fprintf(outfile, "Time-Average Number:          %8.2f\n",
+          transfer[1]); /* count */
+  fprintf(outfile, "Maximum Number:               %8.0f\n",
+          transfer[2]); /* count */
 
-  fprintf(outfile, "\n\n\n Work      Average delay       Maximum delay         "
-                   "Average number         Maximum Number");
-  fprintf(outfile, "\nstation      in queue            in queue               "
-                   "in queue               in queue");
-  for (j = 1; j <= num_stations; ++j) {
-    if (num_machines[j] == -1)
-      continue;
-
-    sampst(0.0, -j);
-    double avg_delay = transfer[1];
-    double max_delay = transfer[3];
-
-    fprintf(outfile, "\n\n%4d%17.3f%17.3f", j, avg_delay, max_delay);
-
-    if (j != 4) {
-      filest(j);
-      double avg_queue = transfer[1];
-      double max_queue = transfer[2];
-      fprintf(outfile, "%17.3f%17.3f", avg_queue, max_queue);
-    } else // if cashier
-    {
-      fprintf(outfile, "%5s", ""); // small gap before each cashier
-
-      // Print all average queues
-      for (int k = 1; k <= num_machines[4]; k++) {
-        filest((3 + k)); // Lists 4, 5, 6 for cashiers 1, 2, 3
-        double avg_queue_k = transfer[1];
-        // Handle unused lists (SIMLIB returns garbage for lists never used)
-        if (avg_queue_k < 0)
-          avg_queue_k = 0.0;
-        fprintf(outfile, "%6.3f", avg_queue_k);
-        if (k < num_machines[4])
-          fprintf(outfile, " | ");
-      }
-
-      fprintf(outfile, "%5s", ""); // spacing between avg and max
-
-      // Print all max queues
-      for (int k = 1; k <= num_machines[4]; k++) {
-        filest((3 + k)); // Lists 4, 5, 6 for cashiers 1, 2, 3
-        double max_queue_k = transfer[2];
-        // Handle unused lists (SIMLIB returns garbage for lists never used)
-        if (max_queue_k < 0)
-          max_queue_k = 0.0;
-        fprintf(outfile, "%6.3f", max_queue_k);
-        if (k < num_machines[4])
-          fprintf(outfile, " | ");
-      }
-    }
-  }
+  fprintf(outfile, "\n========================================\n");
+  fprintf(outfile, "END OF REPORT\n");
+  fprintf(outfile, "========================================\n");
 }
